@@ -5,6 +5,7 @@ import os
 import pynvml
 import speedtest
 
+#:<change>
 # Read YAML file
 with open("config.yaml", 'r') as stream:
     config_loaded = yaml.safe_load(stream)
@@ -16,6 +17,7 @@ status = ''
 ClientMultiSocket = socket.socket()
 host = config_loaded["server"]["ip"]
 port = config_loaded["server"]["port"]
+#:</change>
 
 username = input("Input your username: ")
 print('Waiting for connection response')
@@ -31,6 +33,7 @@ def memory():
 def cpu():
     return (100-p.cpu_percent(), p.cpu_count(logical=True))
 
+#:<change>
 def gpu_memory():
     try:
         pynvml.nvmlInit()
@@ -44,6 +47,7 @@ def gpu_memory():
 def download_speed():
     st = speedtest.Speedtest()
     return st.download()/8
+#:</change>
     
 # first check response received i.e "Server is working"
 res = ClientMultiSocket.recv(1024)
@@ -70,12 +74,13 @@ res = ClientMultiSocket.recv(1024).decode('utf-8')
 print(res)
 print("/"*90 + "\n")
     
+#:<change>
 # receive status in kazaa architecture
 status = ClientMultiSocket.recv(1024).decode('utf-8')[len("status:"):]
 print("\n" + "/"*40 + " waiting for ack " + "/"*40)
 print("You are appointed as " + ("Super node." if status=="s" else "Ordinary node."))
 print("/"*90 + "\n")
-
+#:</change>
 
 # series of many to one communication between server and client
 while True:

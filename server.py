@@ -4,6 +4,7 @@ from _thread import *
 import yaml
 import io
 
+#:<change>
 # Read YAML file
 with open("config.yaml", 'r') as stream:
     config_loaded = yaml.safe_load(stream)
@@ -26,6 +27,7 @@ cpu_free = [0]*all_nodes
 cpu_cores = [0]*all_nodes
 status = ['']*all_nodes
 kazaa_constant = [0]*all_nodes
+#:</change>
 
 # giving a dynamic IP and reuseable port to the server
 ServerSideSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -38,6 +40,7 @@ except socket.error as e:
     print(str(e))
 ServerSideSocket.listen(all_nodes)
 
+#:<change>
 # Write server host to config.yaml file
 config_loaded["server"]["ip"] = socket.gethostbyname(host)
 with io.open('config.yaml', 'w', encoding='utf8') as outfile:
@@ -87,6 +90,7 @@ def initiate_kazaa():
     for connection in connections:
         send_str = "status:" + status[connections.index(connection)]
         connection.sendall(str.encode(send_str))
+#:</change>
         
     
 
@@ -108,10 +112,11 @@ def multi_threaded_client(connection, id):
             # sending ack
             send_str = "ack: received following system info:  Download_speed = " + str(download_speed[id]) + "B Free_GPU_RAM = " + str(gpu_ram_free[id]) + "B Free_RAM = " + str(ram_free[id]) + "B Free_CPU = " + str(cpu_free[id]) + " CPU_Cores = " + str(cpu_cores[id])
             connection.sendall(str.encode(send_str))
-    
+#:<change>
     connections.append(connection)
     if(len(connections) >= all_nodes):
         initiate_kazaa()
+#:</change>
 
     while True:
         data = connection.recv(2048)
@@ -127,9 +132,11 @@ def multi_threaded_client(connection, id):
         connection.sendall(str.encode(response))
     connection.close()
 
+#:<change>
 # assuming dataset uploaded by the user
 fileNumber = int(input("Which dataset you want to use from 0 - " + str(len(datasets)-1) + " : "))
 size = os.path.getsize(datasets[fileNumber]) 
+#:</change>
 
 # always open for more clients to connect
 print('Socket is listening..')
