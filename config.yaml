@@ -1,0 +1,8 @@
+datasets:
+- spam_ham_dataset.csv
+kazaa:
+  o_node_per: 1
+  s_nodes: 1
+server:
+  ip: 192.168.0.120
+  port: 2057

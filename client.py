@@ -1,26 +1,28 @@
 import socket
 import psutil as p
+import yaml
+import os
+import pynvml
+import speedtest
 
+# Read YAML file
+with open("config.yaml", 'r') as stream:
+    config_loaded = yaml.safe_load(stream)
+    
+# Global Fields
+status = ''
+    
 # Connecting to server's ip address
 ClientMultiSocket = socket.socket()
-host = input("Specify server's IP address: ")
-port = 2057
+host = config_loaded["server"]["ip"]
+port = config_loaded["server"]["port"]
+
 username = input("Input your username: ")
 print('Waiting for connection response')
 try:
     ClientMultiSocket.connect((host, port))
 except socket.error as e:
     print(str(e))
-
-#:<change>
-def disk():
-    total_bytes = 0
-    free_bytes = 0
-    for x in p.disk_partitions():
-        dsk = p.disk_usage(x.mountpoint)
-        total_bytes += dsk.total
-        free_bytes += dsk.free
-    return (total_bytes, free_bytes)
 
 def memory():
     mem = p.virtual_memory()
@@ -29,27 +31,52 @@ def memory():
 def cpu():
     return (100-p.cpu_percent(), p.cpu_count(logical=True))
 
+def gpu_memory():
+    try:
+        pynvml.nvmlInit()
+        # 1 here is the GPU id
+        handle = pynvml.nvmlDeviceGetHandleByIndex(1)
+        meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        return meminfo.free
+    except:
+        return 0
+
+def download_speed():
+    st = speedtest.Speedtest()
+    return st.download()/8
+    
 # first check response received i.e "Server is working"
 res = ClientMultiSocket.recv(1024)
 print(res.decode('utf-8'))
 
 # sending system info
-messages_to_send = 6
+messages_to_send = 5
 ClientMultiSocket.send(str.encode("rcv:"+str(messages_to_send)))
-ClientMultiSocket.send(str.encode(str(disk()[0])))
-ClientMultiSocket.send(str.encode(str(disk()[1])))
-ClientMultiSocket.send(str.encode(str(memory()[0])))
+
+# download speed in bytes
+ClientMultiSocket.send(str.encode(str(download_speed())))
+# available GPU ram in bytes
+ClientMultiSocket.send(str.encode(str(gpu_memory())))
+# available ram in bytes
 ClientMultiSocket.send(str.encode(str(memory()[1])))
+# cpu free in percentage
 ClientMultiSocket.send(str.encode(str(cpu()[0])))
+# cpu cores in count
 ClientMultiSocket.send(str.encode(str(cpu()[1])))
-#:</change>
 
 # receive acknowledge
 print("\n" + "/"*40 + " waiting for ack " + "/"*40)
-res = ClientMultiSocket.recv(1024)
-print(res.decode('utf-8'))
+res = ClientMultiSocket.recv(1024).decode('utf-8')
+print(res)
 print("/"*90 + "\n")
     
+# receive status in kazaa architecture
+status = ClientMultiSocket.recv(1024).decode('utf-8')[len("status:"):]
+print("\n" + "/"*40 + " waiting for ack " + "/"*40)
+print("You are appointed as " + ("Super node." if status=="s" else "Ordinary node."))
+print("/"*90 + "\n")
+
+
 # series of many to one communication between server and client
 while True:
     messages_to_send = input('Write number of messages you want to send >>>> ')
