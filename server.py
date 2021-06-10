@@ -3,8 +3,8 @@ import os
 from _thread import *
 import yaml
 import io
+import pandas as pd
 
-#:<change>
 # Read YAML file
 with open("config.yaml", 'r') as stream:
     config_loaded = yaml.safe_load(stream)
@@ -12,14 +12,18 @@ with open("config.yaml", 'r') as stream:
 # reading from config file
 port = config_loaded["server"]["port"]
 datasets = config_loaded["datasets"]
-s_nodes = config_loaded["kazaa"]["s_nodes"]
-o_nodes = config_loaded["kazaa"]["o_node_per"]
-all_nodes = s_nodes + (s_nodes*o_nodes)
+#:<change>
+s_nodes_count = config_loaded["kazaa"]["s_nodes"]
+o_nodes_count = config_loaded["kazaa"]["o_node_per"]
+all_nodes = s_nodes_count + (s_nodes_count*o_nodes_count)
+#:</change>
 
 # Global fields
 clientId = -1
 ThreadCount = 0
 connections = []
+ports = []
+ips = []
 download_speed = [0]*all_nodes
 gpu_ram_free = [0]*all_nodes
 ram_free = [0]*all_nodes
@@ -27,7 +31,7 @@ cpu_free = [0]*all_nodes
 cpu_cores = [0]*all_nodes
 status = ['']*all_nodes
 kazaa_constant = [0]*all_nodes
-#:</change>
+network = {}
 
 # giving a dynamic IP and reuseable port to the server
 ServerSideSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -40,17 +44,24 @@ except socket.error as e:
     print(str(e))
 ServerSideSocket.listen(all_nodes)
 
-#:<change>
 # Write server host to config.yaml file
 config_loaded["server"]["ip"] = socket.gethostbyname(host)
 with io.open('config.yaml', 'w', encoding='utf8') as outfile:
     yaml.dump(config_loaded, outfile, default_flow_style=False, allow_unicode=True)
 
+# a generalized method for sending all data requested
+def send_socket_str(connection, text):
+    sent_bytes = 0
+    to_be_send_bytes = len(text.encode('utf-8'))
+    connection.send(str.encode(str(to_be_send_bytes)))
+    while(sent_bytes < to_be_send_bytes):
+        sent_bytes += connection.send(str.encode(text[sent_bytes:]))
+
 # giving minimum requirement of RAM for supernode
 def get_required_ram(fileSize, node="s"):
-    amount = fileSize/s_nodes
+    amount = fileSize/s_nodes_count
     if(node == "o"):
-        amount /= o_nodes
+        amount /= o_nodes_count
     return amount
         
 def cal_kazaa_constant(id):
@@ -70,10 +81,32 @@ def get_node_status(id):
     const = kazaa_constant[id]
     a = kazaa_constant.copy()
     a.sort()
-    if const in a[len(a)-s_nodes:]:
+    if const in a[len(a)-s_nodes_count:]:
         return "s"
     else:
         return "o"
+
+#:<change>
+# assigning onodes to supernodes
+def create_network():
+    d2_lst = []
+    for i in range(len(ports)):
+        lst = [ips[i], ports[i], status[i], kazaa_constant[i], connections[i]]
+        d2_lst.append(lst)
+    
+    headers = ['IP', 'Port', 'Status', 'Kazaa Constant', 'Connection']
+    df = pd.DataFrame(d2_lst, columns = headers)
+    df = df.sort_values(by='Kazaa Constant', ascending=False)
+    
+    i = 0
+    for index1, row1 in df[:s_nodes_count].iterrows():
+        network[(row1['IP'], row1['Port'], row1['Connection'])] = []
+        start = df.shape[0] - o_nodes_count*(i+1)
+        end = df.shape[0] - o_nodes_count*i
+        for index2, row2 in df[start:end].iterrows():
+            network[(row1['IP'], row1['Port'], row1['Connection'])].append((row2['IP'], row2['Port'], row2['Connection']))
+        i+=1
+#:</change>
 
 # initiating formation of kazaa architecture
 def initiate_kazaa():
@@ -89,19 +122,31 @@ def initiate_kazaa():
         
     for connection in connections:
         send_str = "status:" + status[connections.index(connection)]
-        connection.sendall(str.encode(send_str))
-#:</change>
-        
+        send_socket_str(connection, send_str)
     
+    #:<change>
+    # creating a network topology as in kazaa
+    create_network();
+    
+    for (sIP, sPort, sConnection), onodes in network.items():
+        onodes_IP_PORTS_to_send = len(onodes)
+        send_socket_str(sConnection, "rcv:"+str(onodes_IP_PORTS_to_send))
+        
+        send_snode_IP_PORT = sIP + ":" + str(sPort)
+        for (oIP, oPort, oConnection) in onodes:
+            send_onode_IP_PORT = oIP + ":" + str(oPort)
+            send_socket_str(sConnection, send_onode_IP_PORT)
+            send_socket_str(oConnection, send_snode_IP_PORT)
+    #:</change>
 
 # function to be run in independent thread
 def multi_threaded_client(connection, id):
-    connection.sendall(str.encode('Server is working:'))
+    send_socket_str(connection,'Server is working:')
     
     # receiving system info
-    data = connection.recv(2048)
-    if data.decode('utf-8').startswith("rcv:"):
-        count = int(data.decode('utf-8')[4:])
+    data = connection.recv(2048).decode('utf-8')
+    if data.startswith("rcv:"):
+        count = int(data[len("rcv:"):])
         if(count == 5):
             download_speed[id] = float(connection.recv(2048).decode('utf-8'))
             gpu_ram_free[id] = float(connection.recv(2048).decode('utf-8'))
@@ -111,12 +156,11 @@ def multi_threaded_client(connection, id):
 
             # sending ack
             send_str = "ack: received following system info:  Download_speed = " + str(download_speed[id]) + "B Free_GPU_RAM = " + str(gpu_ram_free[id]) + "B Free_RAM = " + str(ram_free[id]) + "B Free_CPU = " + str(cpu_free[id]) + " CPU_Cores = " + str(cpu_cores[id])
-            connection.sendall(str.encode(send_str))
-#:<change>
+            send_socket_str(connection, send_str)
     connections.append(connection)
+    
     if(len(connections) >= all_nodes):
         initiate_kazaa()
-#:</change>
 
     while True:
         data = connection.recv(2048)
@@ -129,14 +173,12 @@ def multi_threaded_client(connection, id):
                 data = connection.recv(2048).decode('utf-8')
                 response += " " + data
                 
-        connection.sendall(str.encode(response))
+        send_socket_str(connection, response)
     connection.close()
 
-#:<change>
 # assuming dataset uploaded by the user
 fileNumber = int(input("Which dataset you want to use from 0 - " + str(len(datasets)-1) + " : "))
 size = os.path.getsize(datasets[fileNumber]) 
-#:</change>
 
 # always open for more clients to connect
 print('Socket is listening..')
@@ -145,5 +187,7 @@ while True:
     clientId += 1
     start_new_thread(multi_threaded_client, (Client, clientId))
     ThreadCount += 1
+    ips.append(address[0])
+    ports.append(address[1])
     print('Thread Number: ' + str(ThreadCount) + " - " + 'Connected to: ' + address[0] + ':' + str(address[1]))
 ServerSideSocket.close()
