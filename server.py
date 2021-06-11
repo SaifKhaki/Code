@@ -53,9 +53,38 @@ with io.open('config.yaml', 'w', encoding='utf8') as outfile:
 def send_socket_str(connection, text):
     sent_bytes = 0
     to_be_send_bytes = len(text.encode('utf-8'))
-    connection.send(str.encode(str(to_be_send_bytes)))
+    while(True):
+        print("sending rcv count")
+        connection.send(str.encode(str(to_be_send_bytes)))
+        ack = connection.recv(2048).decode('utf-8')
+        if(ack == "rcvd"):
+            break
+        
     while(sent_bytes < to_be_send_bytes):
         sent_bytes += connection.send(str.encode(text[sent_bytes:]))
+        print("sending all bytes:"+str(sent_bytes)+"/",str(to_be_send_bytes))
+    print("sent")
+
+# a generalized method for rcving all data requested
+def rcv_socket_str(connection):
+    rcvd_bytes = 0
+    rcvd_str = ""
+    while(True):
+        try:
+            print("waiting to rcv count")
+            to_be_rcvd_bytes = int(connection.recv(1024).decode('utf-8'))
+            connection.send(str.encode("rcvd"))
+            break
+        except:
+            connection.send(str.encode("0"))
+            
+    while(rcvd_bytes < to_be_rcvd_bytes):
+        rcvd = connection.recv(1024)
+        rcvd_bytes += len(rcvd)
+        rcvd_str += rcvd.decode('utf-8')
+        print("waiting to rcv whole string, rcvd yet: " + rcvd_str)
+    print("whole string rcvd")
+    return rcvd_str
 
 # giving minimum requirement of RAM for supernode
 def get_required_ram(fileSize, node="s"):
@@ -144,15 +173,15 @@ def multi_threaded_client(connection, id):
     send_socket_str(connection,'Server is working:')
     
     # receiving system info
-    data = connection.recv(2048).decode('utf-8')
+    data = rcv_socket_str(connection)
     if data.startswith("rcv:"):
         count = int(data[len("rcv:"):])
         if(count == 5):
-            download_speed[id] = float(connection.recv(2048).decode('utf-8'))
-            gpu_ram_free[id] = float(connection.recv(2048).decode('utf-8'))
-            ram_free[id] = float(connection.recv(2048).decode('utf-8'))
-            cpu_free[id] = float(connection.recv(2048).decode('utf-8'))
-            cpu_cores[id] = int(connection.recv(2048).decode('utf-8'))
+            download_speed[id] = float(rcv_socket_str(connection))
+            gpu_ram_free[id] = float(rcv_socket_str(connection))
+            ram_free[id] = float(rcv_socket_str(connection))
+            cpu_free[id] = float(rcv_socket_str(connection))
+            cpu_cores[id] = int(rcv_socket_str(connection))
 
             # sending ack
             send_str = "ack: received following system info:  Download_speed = " + str(download_speed[id]) + "B Free_GPU_RAM = " + str(gpu_ram_free[id]) + "B Free_RAM = " + str(ram_free[id]) + "B Free_CPU = " + str(cpu_free[id]) + " CPU_Cores = " + str(cpu_cores[id])
@@ -163,14 +192,14 @@ def multi_threaded_client(connection, id):
         initiate_kazaa()
 
     while True:
-        data = connection.recv(2048)
+        data = rcv_socket_str(connection)
         response = 'Server message: ' + data.decode('utf-8')
         if not data:
             break
         elif data.decode('utf-8').startswith("rcv:"):
             count = int(data.decode('utf-8')[len("rcv:"):])
             for i in range(count):
-                data = connection.recv(2048).decode('utf-8')
+                data = rcv_socket_str(connection)
                 response += " " + data
                 
         send_socket_str(connection, response)

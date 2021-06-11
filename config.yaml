@@ -5,4 +5,4 @@ kazaa:
   s_nodes: 1
 server:
   ip: 192.168.0.120
-  port: 2057
+  port: 3333

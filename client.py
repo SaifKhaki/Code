@@ -51,31 +51,57 @@ def download_speed():
 def rcv_socket_str(connection):
     rcvd_bytes = 0
     rcvd_str = ""
-    to_be_rcvd_bytes = int(connection.recv(1024).decode('utf-8'))
+    while(True):
+        try:
+            print("waiting to rcv count")
+            to_be_rcvd_bytes = int(connection.recv(1024).decode('utf-8'))
+            connection.send(str.encode("rcvd"))
+            break
+        except:
+            connection.send(str.encode("0"))
+            
     while(rcvd_bytes < to_be_rcvd_bytes):
         rcvd = connection.recv(1024)
         rcvd_bytes += len(rcvd)
         rcvd_str += rcvd.decode('utf-8')
+        print("waiting to rcv whole string, rcvd yet: " + rcvd_str)
+    print("whole string rcvd")
     return rcvd_str
-    
+
+# a generalized method for sending all data requested
+def send_socket_str(connection, text):
+    sent_bytes = 0
+    to_be_send_bytes = len(text.encode('utf-8'))
+    while(True):
+        print("sending rcv count")
+        connection.send(str.encode(str(to_be_send_bytes)))
+        ack = connection.recv(2048).decode('utf-8')
+        if(ack == "rcvd"):
+            break
+        
+    while(sent_bytes < to_be_send_bytes):
+        sent_bytes += connection.send(str.encode(text[sent_bytes:]))
+        print("sending all bytes:"+str(sent_bytes)+"/",str(to_be_send_bytes))
+    print("sent")
+        
 # first check response received i.e "Server is working"
 res = rcv_socket_str(ClientMultiSocket)
 print(res)
 
 # sending system info
 messages_to_send = 5
-ClientMultiSocket.send(str.encode("rcv:"+str(messages_to_send)))
+send_socket_str(ClientMultiSocket, "rcv:"+str(messages_to_send))
 
 # download speed in bytes
-ClientMultiSocket.send(str.encode(str(download_speed())))
+send_socket_str(ClientMultiSocket, str(download_speed()))
 # available GPU ram in bytes
-ClientMultiSocket.send(str.encode(str(gpu_memory())))
+send_socket_str(ClientMultiSocket, str(gpu_memory()))
 # available ram in bytes
-ClientMultiSocket.send(str.encode(str(memory()[1])))
+send_socket_str(ClientMultiSocket, str(memory()[1]))
 # cpu free in percentage
-ClientMultiSocket.send(str.encode(str(cpu()[0])))
+send_socket_str(ClientMultiSocket, str(cpu()[0]))
 # cpu cores in count
-ClientMultiSocket.send(str.encode(str(cpu()[1])))
+send_socket_str(ClientMultiSocket, str(cpu()[1]))
 
 # receive acknowledge
 print("\n" + "/"*40 + " waiting for ack " + "/"*40)
@@ -113,10 +139,10 @@ elif status == "o":
 # series of many to one communication between server and client
 while True:
     messages_to_send = input('Write number of messages you want to send >>>> ')
-    ClientMultiSocket.send(str.encode("rcv:"+messages_to_send))
+    send_socket_str(ClientMultiSocket, "rcv:"+messages_to_send)
     for i in range(int(messages_to_send)):
         Input = input('>>>> ')
-        ClientMultiSocket.send(str.encode(Input))
+        send_socket_str(ClientMultiSocket, Input)
     if messages_to_send == "0":
         break
     res = rcv_socket_str(ClientMultiSocket)
