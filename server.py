@@ -3,7 +3,12 @@ import os
 from _thread import *
 import yaml
 import io
+import math
+# ML Specific
+import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
+from nltk.tokenize import RegexpTokenizer
 
 # Read YAML file
 with open("config.yaml", 'r') as stream:
@@ -19,7 +24,6 @@ all_nodes = s_nodes_count + (s_nodes_count*o_nodes_count)
 # Global fields
 clientId = -1
 ThreadCount = 0
-connections = []
 ports = []
 ips = []
 download_speed = [0]*all_nodes
@@ -29,18 +33,26 @@ cpu_free = [0]*all_nodes
 cpu_cores = [0]*all_nodes
 status = ['']*all_nodes
 kazaa_constant = [0]*all_nodes
+# format: snode_(ip,port,connection_object) as key : [(ip,port,connection)i] for i=onode_count as value 
 network = {}
 
+######################################## Connections ################################
+# format: [connection_objects] for all nodes
+connections = []
+# format: [(ip, port, connection_object)i] for i = snode_count
+snode_connections = []
+node_connection = None
+
 # giving a dynamic IP and reuseable port to the server
-ServerSideSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-ServerSideSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+node_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+node_connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 host = socket.gethostname()
 print("The server's IP address: ", socket.gethostbyname(host))
 try:
-    ServerSideSocket.bind((host, port))
+    node_connection.bind((host, port))
 except socket.error as e:
     print(str(e))
-ServerSideSocket.listen(all_nodes)
+node_connection.listen(all_nodes)
 
 # Write server host to config.yaml file
 config_loaded["server"]["ip"] = socket.gethostbyname(host)
@@ -54,6 +66,7 @@ def get_required_ram(fileSize, node="s"):
         amount /= o_nodes_count
     return amount
         
+# calculating kazaa constant on the basis of which we are going to classify who is going to be a supernode or ordinary node
 def cal_kazaa_constant(id):
     data_per_region = get_required_ram(size)
     # /10 means to get data downloaded in max 10 secs
@@ -117,13 +130,50 @@ def initiate_kazaa():
     
     for (sIP, sPort, sConnection), onodes in network.items():
         onodes_IP_PORTS_to_send = len(onodes)
-        print("waiting to receive snodes ip")
+        snode_connections.append((sIP, sPort, sConnection))
+        print("waiting to receive snodes ip to be shared among its region ordinary nodes...")
         ip_port = sConnection.recv(1024).decode('utf-8').split(":")
         send_snode_IP_PORT = ip_port[0] + ":" + ip_port[1]
         print("rcvd: " + send_snode_IP_PORT)
         for (oIP, oPort, oConnection) in onodes:
             oConnection.send(str.encode(send_snode_IP_PORT))
 
+# cleaning the text of mails with respect to a tockenizer
+def clean_str(string, reg = RegexpTokenizer(r'[a-z]+')):
+    string = string.lower()
+    tokens = reg.tokenize(string)
+    return " ".join(tokens)
+
+def send_rows_snode(connection, df, div, index, headers):
+    connection.send(str.encode("rcv:"+str(div)))
+    connection.send(str.encode("rcv:"+headers))
+    for i, row in df[int(div*index):int(div*(index+1))].iterrows():
+    # for i, row in df[:30].iterrows():
+        connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
+        ack = connection.recv(1024).decode('utf-8')
+        while(ack != "rcvd"):
+            connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
+            ack = connection.recv(1024).decode('utf-8')
+
+# division, sending of dataset to supernodes
+def ensemble_distribution():
+    df = pd.read_csv('spam_ham_dataset.csv')
+    df['text_clean'] = df['text'].apply(lambda string: clean_str(string))
+    del df['text']
+    
+    # data per supernode
+    division = math.ceil(df.shape[0]/s_nodes_count)
+    
+    # headers
+    headers = ":".join(list(df.columns))
+    
+    index = 0
+    print("Sending data...")
+    for snode_connection in snode_connections:
+        send_rows_snode(snode_connection[2], df, division, index, headers)
+        print("Sent all data to", snode_connection[0], "at port", snode_connection[1])
+        index += 1
+    
 # function to be run in independent thread
 def multi_threaded_client(connection, id):
     connection.send(str.encode('Server is working:'))
@@ -140,13 +190,17 @@ def multi_threaded_client(connection, id):
             cpu_cores[id] = int(connection.recv(1024).decode('utf-8'))
 
             # sending ack
-            send_str = "ack: received following system info:  Download_speed = " + str(download_speed[id]) + "B Free_GPU_RAM = " + str(gpu_ram_free[id]) + "B Free_RAM = " + str(ram_free[id]) + "B Free_CPU = " + str(cpu_free[id]) + " CPU_Cores = " + str(cpu_cores[id])
+            send_str = "ack: received following system info:  \nDownload_speed = " + str(download_speed[id]) + "B \nFree_GPU_RAM = " + str(gpu_ram_free[id]) + "B \nFree_RAM = " + str(ram_free[id]) + "B \nFree_CPU = " + str(cpu_free[id]) + " \nCPU_Cores = " + str(cpu_cores[id])
             connection.send(str.encode(send_str))
     connections.append(connection)
     
+    # creates a nerwork of supernodes and ordinary nodes, and introduce them to each other
     if(len(connections) >= all_nodes):
         initiate_kazaa()
+        # division, sending of dataset to supernodes, receiving predictions
+        ensemble_distribution()
 
+    
     while True:
         data = connection.recv(1024).decode('utf-8')
         response = 'Server message: ' + data
@@ -168,11 +222,11 @@ size = os.path.getsize(datasets[fileNumber])
 # always open for more clients to connect
 print('Socket is listening..')
 while True:
-    Client, address = ServerSideSocket.accept()
+    Client, address = node_connection.accept()
     clientId += 1
     start_new_thread(multi_threaded_client, (Client, clientId))
     ThreadCount += 1
     ips.append(address[0])
     ports.append(address[1])
     print('Thread Number: ' + str(ThreadCount) + " - " + 'Connected to: ' + address[0] + ':' + str(address[1]))
-ServerSideSocket.close()
+node_connection.close()

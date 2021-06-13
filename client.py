@@ -5,6 +5,8 @@ import os
 import pynvml
 from _thread import *
 import speedtest
+# ML Specific
+import pandas as pd
 
 # Read YAML file
 with open("config.yaml", 'r') as stream:
@@ -13,12 +15,17 @@ with open("config.yaml", 'r') as stream:
 # Global Fields
 status = ''
 onodes = []
-onodes_connections = []
 snodes = []
+
+######################################## Connections ################################
+# format: [(ip,port,connection)i] for i=onode_count
+onodes_connections = []
+# format: connection_object
 snode_connection = None
+server_connection = None
     
 # Connecting to server's ip address
-ClientMultiSocket = socket.socket()
+server_connection = socket.socket()
 host = config_loaded["server"]["ip"]
 port = config_loaded["server"]["port"]
 o_nodes_count = config_loaded["kazaa"]["o_node_per"]
@@ -26,7 +33,7 @@ o_nodes_count = config_loaded["kazaa"]["o_node_per"]
 username = input("Input your username: ")
 print('Waiting for connection response')
 try:
-    ClientMultiSocket.connect((host, port))
+    server_connection.connect((host, port))
 except socket.error as e:
     print(str(e))
 
@@ -55,36 +62,64 @@ def multi_threaded_client(connection, id):
     print(str(id) + " inside")
         
 # first check response received i.e "Server is working"
-res = ClientMultiSocket.recv(1024).decode('utf-8')
+res = server_connection.recv(1024).decode('utf-8')
 print(res)
 
 # sending system info
 messages_to_send = 5
-ClientMultiSocket.send(str.encode("rcv:"+str(messages_to_send)))
+server_connection.send(str.encode("rcv:"+str(messages_to_send)))
 
 # download speed in bytes
-ClientMultiSocket.send(str.encode(str(download_speed())))
+server_connection.send(str.encode(str(download_speed())))
 # available GPU ram in bytes
-ClientMultiSocket.send(str.encode(str(gpu_memory())))
+server_connection.send(str.encode(str(gpu_memory())))
 # available ram in bytes
-ClientMultiSocket.send(str.encode(str(memory()[1])))
+server_connection.send(str.encode(str(memory()[1])))
 # cpu free in percentage
-ClientMultiSocket.send(str.encode(str(cpu()[0])))
+server_connection.send(str.encode(str(cpu()[0])))
 # cpu cores in count
-ClientMultiSocket.send(str.encode(str(cpu()[1])))
+server_connection.send(str.encode(str(cpu()[1])))
 
 # receive acknowledge
 print("\n" + "/"*40 + " waiting for ack " + "/"*40)
-res = ClientMultiSocket.recv(1024).decode('utf-8')
+res = server_connection.recv(1024).decode('utf-8')
 print(res)
 print("/"*90 + "\n")
     
 # receive status in kazaa architecture
-status = ClientMultiSocket.recv(1024).decode('utf-8')[len("status:"):]
-print("\n" + "/"*40 + " waiting for ack " + "/"*40)
+status = server_connection.recv(1024).decode('utf-8')[len("status:"):]
+print("\n" + "/"*40 + " waiting for status " + "/"*40)
 print("You are appointed as " + ("Super node." if status=="s" else "Ordinary node."))
 print("/"*90 + "\n")
 
+def receive_rows_snode():
+    row_count_str = server_connection.recv(1024).decode('utf-8')
+    if row_count_str.startswith("rcv:"):
+        row_count = int(row_count_str[len("rcv:"):])
+        headers = server_connection.recv(1024).decode('utf-8')[len("rcv:"):].split(":")
+        print("row_count:", row_count, "headers:", headers)
+        data = []
+        for i in range(row_count):
+            data_rcvd = server_connection.recv(32768).decode('utf-8')
+            while(data_rcvd.count(":") > 3):
+                server_connection.send(str.encode("resend"))
+                data_rcvd = server_connection.recv(32768).decode('utf-8')
+            data.append(data_rcvd.split(":"))
+            server_connection.send(str.encode("rcvd"))
+            print("Rcvd row:", data[-1][:-1])
+    return pd.DataFrame(data, columns=headers)
+
+def send_rows_onode(connection, df, div, index, headers):
+    connection.send(str.encode("rcv:"+str(div)))
+    connection.send(str.encode("rcv:"+headers))
+    for i, row in df[int(div*index):int(div*(index+1))].iterrows():
+    # for i, row in df[:30].iterrows():
+        connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
+        ack = connection.recv(1024).decode('utf-8')
+        while(ack != "rcvd"):
+            connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
+            ack = connection.recv(1024).decode('utf-8')
+            
 if status == "s":
     onodesSocket = socket.socket()
     host = socket.gethostname()
@@ -92,24 +127,34 @@ if status == "s":
     while(True):
         try:
             onodesSocket.bind((host, oport))
-            print("Socket for listening to", o_nodes_count,"ordinary nodes is listening at "+host+":"+str(onodesSocket.getsockname()[1]))
+            print("Socket for listening to", o_nodes_count,"ordinary nodes is listening at "+host+":"+str(onodesSocket.getsockname()[1])+"\n")
             break
         except:
             oport += 1
     
-    ClientMultiSocket.send(str.encode(str(host+":"+str(onodesSocket.getsockname()[1]))))
+    server_connection.send(str.encode(str(host+":"+str(onodesSocket.getsockname()[1]))))
     onodesSocket.listen(o_nodes_count)
-    print('Supernode is listening for', o_nodes_count, 'ordinary nodes..\n')
     
+    # open your onode socket for onodes to get connect
     id = 0
     while(id != o_nodes_count):
         Client, address = onodesSocket.accept()
+        onodes_connections.append((address[0], address[1], Client))
         start_new_thread(multi_threaded_client, (Client, id))
         print('Thread Number: ' + str(id) + " - " + 'Connected to ordinary node: ' + address[0] + ':' + str(address[1]))
         id += 1
-        onodes_connections.append((address[0], address[1], Client))
+        
+    # receive data from server
+    df = receive_rows_snode()
+    print("data rcvd from server for",df.shape[0],"rows with headers:\n",df.columns)
+    
+    # decide each nodes data
+    
+    # send data to respective ordinary nodes
+    # df = receive_rows_snode()
+    
 elif status == "o":
-    ip_port = ClientMultiSocket.recv(1024).decode('utf-8').split(":")
+    ip_port = server_connection.recv(1024).decode('utf-8').split(":")
     snodes.append((ip_port[0], int(ip_port[1])))
     
     for ip,port in snodes:
@@ -130,15 +175,15 @@ elif status == "o":
 while True:
     messages_to_send = input('Write number of messages you want to send >>>> ')
     # send_socket_str(ClientMultiSocket, "rcv:"+messages_to_send)
-    ClientMultiSocket.send(str.encode("rcv:"+messages_to_send))
+    server_connection.send(str.encode("rcv:"+messages_to_send))
     for i in range(int(messages_to_send)):
         Input = input('>>>> ')
         # send_socket_str(ClientMultiSocket, Input)
-        ClientMultiSocket.send(str.encode(Input))
+        server_connection.send(str.encode(Input))
     if messages_to_send == "0":
         break
     # res = rcv_socket_str(ClientMultiSocket)
-    res = ClientMultiSocket.recv(1024).decode('utf-8')
+    res = server_connection.recv(1024).decode('utf-8')
     print(res)
 
-ClientMultiSocket.close()
+server_connection.close()
