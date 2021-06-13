@@ -124,6 +124,10 @@ def initiate_kazaa():
     for connection in connections:
         send_str = "status:" + status[connections.index(connection)]
         connection.send(str.encode(send_str))
+        ack = connection.recv(1024).decode('utf-8')
+        send_str = "k_const:" + str(kazaa_constant[connections.index(connection)])
+        connection.send(str.encode(send_str))
+        ack = connection.recv(1024).decode('utf-8')
     
     # creating a network topology as in kazaa
     create_network();
@@ -148,7 +152,6 @@ def send_rows_snode(connection, df, div, index, headers):
     connection.send(str.encode("rcv:"+str(div)))
     connection.send(str.encode("rcv:"+headers))
     for i, row in df[int(div*index):int(div*(index+1))].iterrows():
-    # for i, row in df[:30].iterrows():
         connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
         ack = connection.recv(1024).decode('utf-8')
         while(ack != "rcvd"):
@@ -180,14 +183,20 @@ def multi_threaded_client(connection, id):
     
     # receiving system info
     data = connection.recv(1024).decode('utf-8')
+    connection.send(str.encode("rcvd"))
     if data.startswith("rcv:"):
         count = int(data[len("rcv:"):])
         if(count == 5):
-            download_speed[id] = float(connection.recv(1024).decode('utf-8'))
-            gpu_ram_free[id] = float(connection.recv(1024).decode('utf-8'))
-            ram_free[id] = float(connection.recv(1024).decode('utf-8'))
-            cpu_free[id] = float(connection.recv(1024).decode('utf-8'))
-            cpu_cores[id] = int(connection.recv(1024).decode('utf-8'))
+            download_speed[id] = float(connection.recv(1024).decode('utf-8')[len("dsp:"):])
+            connection.send(str.encode("rcvd"))
+            gpu_ram_free[id] = float(connection.recv(1024).decode('utf-8')[len("gpu:"):])
+            connection.send(str.encode("rcvd"))
+            ram_free[id] = float(connection.recv(1024).decode('utf-8')[len("ram:"):])
+            connection.send(str.encode("rcvd"))
+            cpu_free[id] = float(connection.recv(1024).decode('utf-8')[len("cpu:"):])
+            connection.send(str.encode("rcvd"))
+            cpu_cores[id] = int(connection.recv(1024).decode('utf-8')[len("cor:"):])
+            connection.send(str.encode("rcvd"))
 
             # sending ack
             send_str = "ack: received following system info:  \nDownload_speed = " + str(download_speed[id]) + "B \nFree_GPU_RAM = " + str(gpu_ram_free[id]) + "B \nFree_RAM = " + str(ram_free[id]) + "B \nFree_CPU = " + str(cpu_free[id]) + " \nCPU_Cores = " + str(cpu_cores[id])
