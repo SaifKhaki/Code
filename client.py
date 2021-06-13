@@ -3,7 +3,7 @@ import psutil as p
 import yaml
 import os
 import pynvml
-from _thread import *
+import threading
 import speedtest
 import math
 # ML Specific
@@ -30,6 +30,7 @@ o_nodes_count = config_loaded["kazaa"]["o_node_per"]
 # Global Fields
 status = ''
 onodes = []
+onodes_threads = [None]*o_nodes_count
 snodes = []
 self_kazaa_constant = 0
 onodes_kazaa_constant = [0]*o_nodes_count
@@ -40,6 +41,33 @@ try:
     server_connection.connect((host, port))
 except socket.error as e:
     print(str(e))
+
+# socket send consistent method 
+# it sends the string, waits for the length of string client received, compares this length to the actual length. If both are equal
+# it sends ack else, it resends the same txt again.
+def socket_send(connection, txt):
+    ack = False
+    print(">>sending",txt+"...")
+    while(not ack):
+        connection.send(str.encode(txt))
+        len_txt = int(connection.recv(1024).decode('utf-8'))
+        if len_txt == len(txt):
+            connection.send(str.encode("ack"))
+            ack = True
+        else:
+            connection.send(str.encode("resending"))
+
+# socket receive consistent method 
+# it receives the string, then sends its size back to the server and then it waits for an acknowledgement, If ack is received it 
+# breaks out of the loop
+def socket_rcv(connection, size=1024):
+    ack = False
+    while(not ack):
+        txt = connection.recv(size).decode('utf-8')
+        connection.send(str.encode(str(len(txt))))
+        ack = True if connection.recv(size).decode('utf-8') == "ack" else False
+    print(">>received", txt+"...")
+    return txt
 
 def memory():
     mem = p.virtual_memory()
@@ -59,41 +87,45 @@ def gpu_memory():
         return 0
 
 def download_speed():
-    st = speedtest.Speedtest()
-    return st.download()/8
+    try:
+        st = speedtest.Speedtest()
+        return st.download()/8
+    except:
+        return 0
    
-def receive_rows_snode(connection):
-    row_count_str = connection.recv(1024).decode('utf-8')
+def receive_rows(connection):
+    print("starting receiving rows")
+    row_count_str = socket_rcv(connection)
     if row_count_str.startswith("rcv:"):
         row_count = int(row_count_str[len("rcv:"):])
-        headers = connection.recv(1024).decode('utf-8')[len("rcv:"):].split(":")
+        headers = socket_rcv(connection)[len("rcv:"):].split(":")
         print("row_count:", row_count, "headers:", headers)
         data = []
         for i in range(row_count):
-            data_rcvd = connection.recv(32768).decode('utf-8')
+            data_rcvd = socket_rcv(connection, 32768)
             while(data_rcvd.count(":") > 3):
-                connection.send(str.encode("resend"))
-                data_rcvd = connection.recv(32768).decode('utf-8')
+                socket_send(connection, "resend")
+                data_rcvd = socket_rcv(connection, 32768)
             data.append(data_rcvd.split(":"))
-            connection.send(str.encode("rcvd"))
+            socket_send(connection, "rcvd")
             print("Rcvd row:", data[-1][:-1])
     return pd.DataFrame(data, columns=headers)
 
 def send_rows_onode(connection, df, division, index, headers):
     start = division[index - 1] if index > 0 else 0
     end = division[index]
-    connection.send(str.encode("rcv:"+str(end - start)))
-    connection.send(str.encode("rcv:"+headers))
+    socket_send(connection, "rcv:"+str(end - start))
+    socket_send(connection, "rcv:"+headers)
     for i, row in df[end:start].iterrows():
-        connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
-        ack = connection.recv(1024).decode('utf-8')
+        socket_send(connection, str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3]))
+        ack = socket_rcv(connection)
         while(ack != "rcvd"):
-            connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
-            ack = connection.recv(1024).decode('utf-8')
+            socket_send(connection, str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3]))
+            ack = socket_rcv(connection)
 
 def ensemble_distribution():
     # receive data from server
-    df = receive_rows_snode(server_connection)
+    df = receive_rows(server_connection)
     print("data rcvd from server for",df.shape[0],"rows with headers:\n",df.columns)
     division = []
     for i in onodes_kazaa_constant:
@@ -118,58 +150,48 @@ def ensemble_distribution():
 # here snode is sender and onode is receiver
 def snode_onode_socket(connection, id):
     print("Waiting for kazaa_constant of",id,"ordinary node.")
-    onodes_kazaa_constant[id] = float(connection.recv(1024).decode('utf-8')[len("k_const:"):])
+    onodes_kazaa_constant[id] = float(socket_rcv(connection)[len("k_const:"):])
     
-    if(id+1 == o_nodes_count):
+    if((id+1) == o_nodes_count):
         ensemble_distribution()
         
 # here onode is sender and snode is receiver
 def onode_snode_socket(connection):
-    connection.send(str.encode("k_const:"+str(self_kazaa_constant)))
-    df = receive_rows_snode(connection)
+    socket_send(connection, "k_const:"+str(self_kazaa_constant))
+    df = receive_rows(connection)
     print("df received from supernode of my region has shape: ", df.shape)
  
 def send_system_info():
     messages_to_send = 5
-    server_connection.send(str.encode("rcv:"+str(messages_to_send)))
-    ack = server_connection.recv(1024).decode('utf-8')
+    socket_send(server_connection, "rcv:"+str(messages_to_send))
     # download speed in bytes
-    server_connection.send(str.encode("dsp:"+str(download_speed())))
-    ack = server_connection.recv(1024).decode('utf-8')
+    socket_send(server_connection, "dsp:"+str(download_speed()))
     # available GPU ram in bytes
-    server_connection.send(str.encode("gpu:"+str(gpu_memory())))
-    res = server_connection.recv(1024).decode('utf-8')
+    socket_send(server_connection, "gpu:"+str(gpu_memory()))
     # available ram in bytes
-    server_connection.send(str.encode("ram:"+str(memory()[1])))
-    res = server_connection.recv(1024).decode('utf-8')
+    socket_send(server_connection, "ram:"+str(memory()[1]))
     # cpu free in percentage
-    server_connection.send(str.encode("cpu:"+str(cpu()[0])))
-    res = server_connection.recv(1024).decode('utf-8')
+    socket_send(server_connection, "cpu:"+str(cpu()[0]))
     # cpu cores in count
-    server_connection.send(str.encode("cor:"+str(cpu()[1])))
-    res = server_connection.recv(1024).decode('utf-8')
+    socket_send(server_connection, "cor:"+str(cpu()[1]))
     
 # first check response received i.e "Server is working"
-res = server_connection.recv(1024).decode('utf-8')
+res = socket_rcv(server_connection)
 print(res)
 
 # sending system info
+print("\n" + "/"*40 + " waiting for ack " + "/"*40)
 send_system_info()
 
 # receive acknowledge
-print("\n" + "/"*40 + " waiting for ack " + "/"*40)
-res = server_connection.recv(1024).decode('utf-8')
+res = socket_rcv(server_connection)
 print(res)
-print("/"*90 + "\n")
     
 # receive status in kazaa architecture
-status = server_connection.recv(1024).decode('utf-8')[len("status:"):]
-server_connection.send(str.encode("ack"))
-self_kazaa_constant = server_connection.recv(1024).decode('utf-8')[len("k_const:"):]
-server_connection.send(str.encode("ack"))
 print("\n" + "/"*40 + " waiting for status " + "/"*40)
+status = socket_rcv(server_connection)[len("status:"):]
+self_kazaa_constant = socket_rcv(server_connection)[len("k_const:"):]
 print("You are appointed as " + ("Super node." if status=="s" else "Ordinary node.") + " with kazaa constant as", self_kazaa_constant)
-print("/"*90 + "\n")
             
 if status == "s":
     onodesSocket = socket.socket()
@@ -178,12 +200,14 @@ if status == "s":
     while(True):
         try:
             onodesSocket.bind((host, oport))
+            print("\n" + "/"*40 + " Supernode Socket " + "/"*40)
             print("Socket for listening to", o_nodes_count,"ordinary nodes is listening at "+host+":"+str(onodesSocket.getsockname()[1])+"\n")
             break
         except:
             oport += 1
     
-    server_connection.send(str.encode(str(host+":"+str(onodesSocket.getsockname()[1]))))
+    socket_send(server_connection, str(host+":"+str(onodesSocket.getsockname()[1])))
+    # server_connection.send(str.encode(str(host+":"+str(onodesSocket.getsockname()[1]))))
     onodesSocket.listen(o_nodes_count)
     
     # open your onode socket for onodes to get connect
@@ -191,12 +215,18 @@ if status == "s":
     while(id != o_nodes_count):
         Client, address = onodesSocket.accept()
         onodes_connections.append((address[0], address[1], Client))
-        start_new_thread(snode_onode_socket, (Client, id))
-        print('Thread Number: ' + str(id) + " - " + 'Connected to ordinary node: ' + address[0] + ':' + str(address[1]))
+        onodes_threads[id] = threading.Thread(target = snode_onode_socket, args=(Client, id))
+        onodes_threads[id].start()
+        # print('Thread Number: ' + str(id) + " - " + 'Connected to ordinary node: ' + address[0] + ':' + str(address[1]))
         id += 1
     
+    # joining all the threads
+    for i in onodes_threads:
+        i.join()
+    
 elif status == "o":
-    ip_port = server_connection.recv(1024).decode('utf-8').split(":")
+    print("\n" + "/"*40 + " Ordinary Node Socket " + "/"*40)
+    ip_port = socket_rcv(server_connection).split(":")
     snodes.append((ip_port[0], int(ip_port[1])))
     
     for ip,port in snodes:

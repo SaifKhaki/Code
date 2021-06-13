@@ -1,6 +1,6 @@
 import socket
 import os
-from _thread import *
+import threading
 import yaml
 import io
 import math
@@ -22,8 +22,10 @@ o_nodes_count = config_loaded["kazaa"]["o_node_per"]
 all_nodes = s_nodes_count + (s_nodes_count*o_nodes_count)
 
 # Global fields
+lock = threading.Lock()
 clientId = -1
-ThreadCount = 0
+threadCount = 0
+node_threads = [None]*all_nodes
 ports = []
 ips = []
 download_speed = [0]*all_nodes
@@ -48,6 +50,7 @@ node_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 node_connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 host = socket.gethostname()
 print("The server's IP address: ", socket.gethostbyname(host))
+port += 1
 try:
     node_connection.bind((host, port))
 except socket.error as e:
@@ -56,9 +59,37 @@ node_connection.listen(all_nodes)
 
 # Write server host to config.yaml file
 config_loaded["server"]["ip"] = socket.gethostbyname(host)
+config_loaded["server"]["port"] = port
 with io.open('config.yaml', 'w', encoding='utf8') as outfile:
     yaml.dump(config_loaded, outfile, default_flow_style=False, allow_unicode=True)
 
+# socket send consistent method 
+# it sends the string, waits for the length of string client received, compares this length to the actual length. If both are equal
+# it sends ack else, it resends the same txt again.
+def socket_send(connection, txt):
+    ack = False
+    print(">>sending",txt+"...")
+    while(not ack):
+        connection.send(str.encode(txt))
+        len_txt = int(connection.recv(1024).decode('utf-8'))
+        if len_txt == len(txt):
+            connection.send(str.encode("ack"))
+            ack = True
+        else:
+            connection.send(str.encode("resending"))
+
+# socket receive consistent method 
+# it receives the string, then sends its size back to the server and then it waits for an acknowledgement, If ack is received it 
+# breaks out of the loop
+def socket_rcv(connection, size=1024):
+    ack = False
+    while(not ack):
+        txt = connection.recv(size).decode('utf-8')
+        connection.send(str.encode(str(len(txt))))
+        ack = True if connection.recv(size).decode('utf-8') == "ack" else False
+    print(">>received", txt+"...")
+    return txt
+    
 # giving minimum requirement of RAM for supernode
 def get_required_ram(fileSize, node="s"):
     amount = fileSize/s_nodes_count
@@ -123,24 +154,22 @@ def initiate_kazaa():
         
     for connection in connections:
         send_str = "status:" + status[connections.index(connection)]
-        connection.send(str.encode(send_str))
-        ack = connection.recv(1024).decode('utf-8')
+        socket_send(connection, send_str)
         send_str = "k_const:" + str(kazaa_constant[connections.index(connection)])
-        connection.send(str.encode(send_str))
-        ack = connection.recv(1024).decode('utf-8')
+        socket_send(connection, send_str)
     
     # creating a network topology as in kazaa
-    create_network();
+    create_network()
     
     for (sIP, sPort, sConnection), onodes in network.items():
         onodes_IP_PORTS_to_send = len(onodes)
         snode_connections.append((sIP, sPort, sConnection))
         print("waiting to receive snodes ip to be shared among its region ordinary nodes...")
-        ip_port = sConnection.recv(1024).decode('utf-8').split(":")
+        ip_port = socket_rcv(sConnection).split(":")
         send_snode_IP_PORT = ip_port[0] + ":" + ip_port[1]
         print("rcvd: " + send_snode_IP_PORT)
         for (oIP, oPort, oConnection) in onodes:
-            oConnection.send(str.encode(send_snode_IP_PORT))
+            socket_send(oConnection, send_snode_IP_PORT)
 
 # cleaning the text of mails with respect to a tockenizer
 def clean_str(string, reg = RegexpTokenizer(r'[a-z]+')):
@@ -149,14 +178,14 @@ def clean_str(string, reg = RegexpTokenizer(r'[a-z]+')):
     return " ".join(tokens)
 
 def send_rows_snode(connection, df, div, index, headers):
-    connection.send(str.encode("rcv:"+str(div)))
-    connection.send(str.encode("rcv:"+headers))
+    socket_send(connection, "rcv:"+str(div))
+    socket_send(connection, "rcv:"+headers)
     for i, row in df[int(div*index):int(div*(index+1))].iterrows():
-        connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
-        ack = connection.recv(1024).decode('utf-8')
+        socket_send(connection, str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3]))
+        ack = socket_rcv(connection)
         while(ack != "rcvd"):
-            connection.send(str.encode(str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3])))
-            ack = connection.recv(1024).decode('utf-8')
+            socket_send(connection, str(row[0])+":"+str(row[1])+":"+str(row[2])+":"+str(row[3]))
+            ack = socket_rcv(connection)
 
 # division, sending of dataset to supernodes
 def ensemble_distribution():
@@ -179,29 +208,25 @@ def ensemble_distribution():
     
 # function to be run in independent thread
 def multi_threaded_client(connection, id):
-    connection.send(str.encode('Server is working:'))
+    socket_send(connection, 'Server is working:')
     
     # receiving system info
-    data = connection.recv(1024).decode('utf-8')
-    connection.send(str.encode("rcvd"))
+    data = socket_rcv(connection)
     if data.startswith("rcv:"):
         count = int(data[len("rcv:"):])
         if(count == 5):
-            download_speed[id] = float(connection.recv(1024).decode('utf-8')[len("dsp:"):])
-            connection.send(str.encode("rcvd"))
-            gpu_ram_free[id] = float(connection.recv(1024).decode('utf-8')[len("gpu:"):])
-            connection.send(str.encode("rcvd"))
-            ram_free[id] = float(connection.recv(1024).decode('utf-8')[len("ram:"):])
-            connection.send(str.encode("rcvd"))
-            cpu_free[id] = float(connection.recv(1024).decode('utf-8')[len("cpu:"):])
-            connection.send(str.encode("rcvd"))
-            cpu_cores[id] = int(connection.recv(1024).decode('utf-8')[len("cor:"):])
-            connection.send(str.encode("rcvd"))
+            download_speed[id] = float(socket_rcv(connection)[len("dsp:"):])
+            gpu_ram_free[id] = float(socket_rcv(connection)[len("gpu:"):])
+            ram_free[id] = float(socket_rcv(connection)[len("ram:"):])
+            cpu_free[id] = float(socket_rcv(connection)[len("cpu:"):])
+            cpu_cores[id] = int(socket_rcv(connection)[len("cor:"):])
 
             # sending ack
             send_str = "ack: received following system info:  \nDownload_speed = " + str(download_speed[id]) + "B \nFree_GPU_RAM = " + str(gpu_ram_free[id]) + "B \nFree_RAM = " + str(ram_free[id]) + "B \nFree_CPU = " + str(cpu_free[id]) + " \nCPU_Cores = " + str(cpu_cores[id])
-            connection.send(str.encode(send_str))
+            socket_send(connection, send_str)
+    lock.acquire()
     connections.append(connection)
+    lock.release()
     
     # creates a nerwork of supernodes and ordinary nodes, and introduce them to each other
     if(len(connections) >= all_nodes):
@@ -209,33 +234,40 @@ def multi_threaded_client(connection, id):
         # division, sending of dataset to supernodes, receiving predictions
         ensemble_distribution()
 
-    
-    while True:
-        data = connection.recv(1024).decode('utf-8')
-        response = 'Server message: ' + data
-        if not data:
-            break
-        elif data.decode('utf-8').startswith("rcv:"):
-            count = int(data.decode('utf-8')[len("rcv:"):])
-            for i in range(count):
-                data = connection.recv(1024).decode('utf-8')
-                response += " " + data
-                
-        connection.send(str.encode(response))
-    connection.close()
-
 # assuming dataset uploaded by the user
 fileNumber = int(input("Which dataset you want to use from 0 - " + str(len(datasets)-1) + " : "))
 size = os.path.getsize(datasets[fileNumber]) 
 
 # always open for more clients to connect
 print('Socket is listening..')
-while True:
+while(True):
     Client, address = node_connection.accept()
     clientId += 1
-    start_new_thread(multi_threaded_client, (Client, clientId))
-    ThreadCount += 1
+    
+    node_threads[threadCount] = threading.Thread(target = multi_threaded_client, args = (Client, clientId))
+    node_threads[threadCount].start()
+    
+    threadCount += 1
     ips.append(address[0])
     ports.append(address[1])
-    print('Thread Number: ' + str(ThreadCount) + " - " + 'Connected to: ' + address[0] + ':' + str(address[1]))
+    print('Thread Number: ' + str(threadCount) + " - " + 'Connected to: ' + address[0] + ':' + str(address[1]))
+
+# joining all the threads
+for i in node_threads:
+    i.join()
+
+while True:
+    data = node_connection.recv(1024).decode('utf-8')
+    response = 'Server message: ' + data
+    if not data:
+        break
+    elif data.decode('utf-8').startswith("rcv:"):
+        count = int(data.decode('utf-8')[len("rcv:"):])
+        for i in range(count):
+            data = node_connection.recv(1024).decode('utf-8')
+            response += " " + data
+            
+    node_connection.send(str.encode(response))
+node_connection.close()
+        
 node_connection.close()
