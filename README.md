@@ -4,7 +4,7 @@
 From the idea of performing all the machine learning tasks in labs that took a lot of time and system power to train and then perform a lot better during prediction, we actually wanted to make the learning stage of an ML model as fast as and as resource efficient as the predicting stage. Hence, we actually wanted to develop a solution that could keep the user from wasting its resources on the training of the model, else use our network of peers to train the model and then predict from it.
 
 # Scale Out
-This project is built while keeping all the abstractions in a file named [Config.yaml](https://github.com/SaifKhaki/Ensemble-Learners/blob/main/config.yaml). Just go to the file and edit your number of regions (i.e. number of supernodes) as well as number of ordinary nodes per region. You can also tune your ip and port of server. Finally, you have the choice to add as many rows of relative addresses of dataset files as you want.
+This project is built while keeping all the abstractions in a file named [Config.yaml](https://github.com/SaifKhaki/Code/blob/master/config.yaml). Just go to the file and edit your number of regions (i.e. number of supernodes) as well as number of ordinary nodes per region. You can also tune your ip and port of server. Finally, you have the choice to add as many rows of relative addresses of dataset files as you want.
 ```
 datasets:
 - Scoring.csv
@@ -15,7 +15,7 @@ server:
   ip: 192.168.40.189
   port: 4354
 ```
-Finally add your machine learning models code in [node1.ipynb](https://github.com/SaifKhaki/Ensemble-Learners/blob/main/node1.ipynb) in the following functions code. This function takes arguments of train data and test data whereas returns the prediction for the test data (we have tested it for a single row in test data).
+Finally add your machine learning models code in [node1.ipynb](https://github.com/SaifKhaki/Code/blob/master/node1.ipynb) in the following functions code. This function takes arguments of train data and test data whereas returns the prediction for the test data (we have tested it for a single row in test data).
 ```
 def train_and_predict(df, df2):
     X = df[[i for i in list(df.columns)[:-1]]]
@@ -39,7 +39,7 @@ def train_and_predict(df, df2):
 ```
 
 # Dataset used
-For our model training and performing bagging concepts, we had to use such a larger dataset that does not give inconsistent predictions when separated to the level of ordinary nodes. It has to be of such length that each node gets a reasonable chunk of the data even after the division across the region. So we used [Scoring.csv](https://github.com/SaifKhaki/Ensemble-Learners/blob/main/Scoring.csv). Moreover, the dataset for predicting the results of a goal mostly depends upon the acceleration, velocity and angle of the foot of the striker. These are the main columns used in our dataset. The target column is actually the result of all these parameters.
+For our model training and performing bagging concepts, we had to use such a larger dataset that does not give inconsistent predictions when separated to the level of ordinary nodes. It has to be of such length that each node gets a reasonable chunk of the data even after the division across the region. So we used [Scoring.csv](https://github.com/SaifKhaki/Code/blob/master/Scoring.csv). Moreover, the dataset for predicting the results of a goal mostly depends upon the acceleration, velocity and angle of the foot of the striker. These are the main columns used in our dataset. The target column is actually the result of all these parameters.
 
 ![image](https://user-images.githubusercontent.com/44811001/123767827-35fdd180-d8e1-11eb-8ae4-270e0ff287fb.png)
 
