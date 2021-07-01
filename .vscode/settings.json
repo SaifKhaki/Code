@@ -1,0 +1,7 @@
+{
+    "jupyter.jupyterServerType": "local",
+    "editor.tokenColorCustomizations": {
+        "comments": "",
+        "textMateRules": []
+    }
+}
