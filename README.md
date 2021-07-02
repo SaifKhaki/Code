@@ -77,7 +77,9 @@ For our future work, we are planning to deploy this solution as a web app using 
 
 ## Support
 Reach out to us at one of the following places!
-- Mail us at saifbinkhaki.official@gmail.com
+- Mail us at 
+  - saifbinkhaki.official@gmail.com
+  - za7285176@gmail.com
 - Support us on devpost 
 
 ---
