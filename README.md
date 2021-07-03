@@ -80,6 +80,7 @@ Reach out to us at one of the following places!
 - Mail us at 
   - saifbinkhaki.official@gmail.com
   - za7285176@gmail.com
+  - aimantahir1225@gmail.com
 - Support us on devpost 
 
 ---
