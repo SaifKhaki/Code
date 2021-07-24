@@ -79,7 +79,7 @@ For our future work, we are planning to deploy this solution as a web app using 
 Reach out to us at one of the following places!
 - Mail us at 
   - saifbinkhaki.official@gmail.com
-  - za7285176@gmail.com
+  - zabbas.bscs18seecs@seecs.edu.pk
   - aimantahir1225@gmail.com
 - Support us on devpost 
 
